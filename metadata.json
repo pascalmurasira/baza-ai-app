@@ -1,0 +1,7 @@
+{
+  "name": "Baza AI - Umufasha w'ubwenge mu Kinyarwanda",
+  "description": "Umufasha w'ubwenge ugirana nawe ibiganiro by'inyandiko mu Kinyarwanda, yagenewe koroha no gukoreshwa n'abantu bose.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
