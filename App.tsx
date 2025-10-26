@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { useChatHistory } from './useChatHistory';
+import { useChatHistory } from './hooks/useChatHistory';
 import Sidebar from './components/Sidebar';
 import ChatDisplay from './components/ChatDisplay';
 import SettingsModal from './components/SettingsModal';
