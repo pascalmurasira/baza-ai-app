@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { useChatHistory } from './hooks/useChatHistory';
+import { useChatHistory } from './useChatHistory';
 import Sidebar from './components/Sidebar';
 import ChatDisplay from './components/ChatDisplay';
 import SettingsModal from './components/SettingsModal';
@@ -17,7 +17,6 @@ function App() {
     const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
     const [settingsModalOpen, setSettingsModalOpen] = useState(false);
     const [cameraModalOpen, setCameraModalOpen] = useState(false);
-
     const [input, setInput] = useState('');
     const [file, setFile] = useState<ChatFile | null>(null);
     const [isSending, setIsSending] = useState(false);
@@ -36,9 +35,7 @@ function App() {
 
     useEffect(() => {
         const handleResize = () => {
-            if (window.innerWidth > 768) {
-                setSidebarOpen(true);
-            } else {
+            if (window.innerWidth <= 768) {
                 setSidebarOpen(false);
             }
         };
@@ -46,248 +43,198 @@ function App() {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    const handleTextareaInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
-        const textarea = e.currentTarget;
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
-    };
-
     useEffect(() => {
         if (textareaRef.current) {
-            handleTextareaInput({ currentTarget: textareaRef.current } as React.FormEvent<HTMLTextAreaElement>);
+            textareaRef.current.style.height = 'auto';
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
         }
     }, [input]);
-
-    const handleSendMessage = useCallback(async (messageText: string, messageFile?: ChatFile | null, messageIdToRetry?: string) => {
-        if ((!messageText.trim() && !messageFile) || !currentChatId || !currentSession) return;
-
-        setIsSending(true);
-
-        const userMessageId = messageIdToRetry || uuidv4();
-        const userMessage: ChatMessage = {
-            id: userMessageId,
-            role: 'user',
-            text: messageText,
-            file: messageFile,
-            timestamp: Date.now(),
-            status: 'complete',
-        };
-        
-        const modelMessageId = uuidv4();
-        const modelMessage: ChatMessage = {
-            id: modelMessageId,
-            role: 'model',
-            text: '',
-            timestamp: Date.now(),
-            status: 'pending',
-        };
-
-        if (messageIdToRetry) {
-            updateChat(currentChatId, {
-                messages: (prev) => prev.filter(m => m.id !== messageIdToRetry)
-            });
-        }
-        
-        updateChat(currentChatId, {
-             messages: (prev) => [...prev, userMessage, modelMessage],
-        });
-
-        setInput('');
-        setFile(null);
-        if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-        }
-
-        try {
-            const chat = await startChat(currentSession.history);
-            
-            const handleStreamChunk = (text: string) => {
-                updateChat(currentChatId, {
-                    messages: (prev) => prev.map(msg => 
-                        msg.id === modelMessageId 
-                            ? { ...msg, text, status: 'pending' } // Keep status pending while streaming
-                            : msg
-                    )
-                });
-            };
-
-            const { text: finalResponseText, groundingChunks } = await sendMessage(chat, messageText, messageFile || undefined, handleStreamChunk);
-
-            updateChat(currentChatId, {
-                history: chat.history,
-                messages: (prev) => prev.map(msg => 
-                    msg.id === modelMessageId 
-                        ? { ...msg, text: finalResponseText, status: 'complete', timestamp: Date.now(), groundingChunks } 
-                        : msg
-                )
-            });
-
-        } catch (error) {
-            console.error("Failed to send message:", error);
-            updateChat(currentChatId, {
-                messages: (prev) => prev.map(msg => 
-                    msg.id === userMessageId 
-                        ? { ...msg, status: 'error' } 
-                        : msg
-                ).filter(m => m.id !== modelMessageId)
-            });
-        } finally {
-            setIsSending(false);
-        }
-    }, [currentChatId, currentSession, updateChat]);
-    
-    const handleSuggestedQuestionClick = (question: string) => {
-        handleSendMessage(question, null);
-    };
-
-    const handleRetry = (messageId: string) => {
-        const messageToRetry = currentSession?.messages.find(m => m.id === messageId);
-        if(messageToRetry) {
-            handleSendMessage(messageToRetry.text, messageToRetry.file, messageId);
-        }
-    };
-
-    const handleRegenerate = () => {
-        if (!currentSession || isSending) return;
-        const lastUserMessage = [...currentSession.messages].reverse().find(m => m.role === 'user');
-        if (lastUserMessage) {
-            // Remove the last model response before regenerating
-            updateChat(currentSession.id, {
-                messages: (prev) => prev.filter(m => m.role !== 'model' || m.id !== currentSession.messages[currentSession.messages.length - 1].id)
-            });
-            handleSendMessage(lastUserMessage.text, lastUserMessage.file);
-        }
-    };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFile = e.target.files?.[0];
         if (selectedFile) {
-            const reader = new FileReader();
-            reader.onload = (loadEvent) => {
-                setFile({
-                    name: selectedFile.name,
-                    type: selectedFile.type,
-                    dataUrl: loadEvent.target?.result as string,
-                });
+            const fileData: ChatFile = {
+                file: selectedFile,
+                preview: URL.createObjectURL(selectedFile),
             };
-            reader.readAsDataURL(selectedFile);
+            setFile(fileData);
         }
     };
-    
-    const handleSendFromCamera = (dataUrl: string, prompt: string) => {
-        const cameraFile: ChatFile = {
-            name: `capture_${new Date().toISOString()}.jpg`,
-            type: 'image/jpeg',
-            dataUrl: dataUrl,
+
+    const handleCameraCapture = (capturedFile: File) => {
+        const fileData: ChatFile = {
+            file: capturedFile,
+            preview: URL.createObjectURL(capturedFile),
         };
-        handleSendMessage(prompt, cameraFile);
+        setFile(fileData);
         setCameraModalOpen(false);
     };
 
-    const handleNewChat = () => {
+    const handleSend = useCallback(async () => {
+        if ((!input.trim() && !file) || isSending) return;
+
+        const userMessage: ChatMessage = {
+            id: uuidv4(),
+            role: 'user',
+            content: input.trim(),
+            timestamp: Date.now(),
+            file: file || undefined,
+        };
+
+        setIsSending(true);
         setInput('');
         setFile(null);
-        newChat();
-    }
-    
-    const handleSelectChat = (id: string) => {
-        setInput('');
-        setFile(null);
-        selectChat(id);
-    }
-    
-    const handleUpdateTitle = (id: string, title: string) => {
-        updateChat(id, { title });
+
+        const updatedMessages = [...(currentSession?.messages || []), userMessage];
+        updateChat(currentChatId, updatedMessages);
+
+        try {
+            let chat = currentSession?.chat;
+            if (!chat) {
+                chat = await startChat();
+                updateChat(currentChatId, updatedMessages, chat);
+            }
+
+            const response = await sendMessage(chat, input.trim(), file?.file);
+
+            const aiMessage: ChatMessage = {
+                id: uuidv4(),
+                role: 'model',
+                content: response,
+                timestamp: Date.now(),
+            };
+
+            updateChat(currentChatId, [...updatedMessages, aiMessage], chat);
+        } catch (error) {
+            console.error('Error sending message:', error);
+            const errorMessage: ChatMessage = {
+                id: uuidv4(),
+                role: 'model',
+                content: 'Sorry, there was an error processing your request.',
+                timestamp: Date.now(),
+            };
+            updateChat(currentChatId, [...updatedMessages, errorMessage]);
+        } finally {
+            setIsSending(false);
+        }
+    }, [input, file, isSending, currentSession, currentChatId, updateChat]);
+
+    const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
     };
 
     return (
-        <div className="h-screen w-screen flex bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 overflow-hidden">
-            <Sidebar 
+        <div className="flex h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
+            <Sidebar
                 sessions={sessions}
                 currentChatId={currentChatId}
-                onNewChat={handleNewChat}
-                onSelectChat={handleSelectChat}
+                onNewChat={newChat}
+                onSelectChat={selectChat}
                 onDeleteChat={deleteChat}
-                onUpdateChatTitle={handleUpdateTitle}
-                onSettings={() => setSettingsModalOpen(true)}
+                onOpenSettings={() => setSettingsModalOpen(true)}
                 isOpen={sidebarOpen}
-                setIsOpen={setSidebarOpen}
+                onClose={() => setSidebarOpen(false)}
             />
-             <div className="flex-1 flex flex-col relative">
-                 <header className="flex items-center justify-between p-2 sm:p-4 border-b border-slate-200 dark:border-slate-700 gap-3">
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden p-2 -ml-2 flex-shrink-0">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                            </svg>
-                        </button>
-                        <h1 className="text-lg font-bold text-slate-800 dark:text-slate-100 truncate">
-                            Baza AI
-                        </h1>
-                    </div>
+
+            <div className="flex-1 flex flex-col overflow-hidden">
+                <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between transition-colors duration-200">
+                    <button
+                        onClick={() => setSidebarOpen(!sidebarOpen)}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                    >
+                        <svg className="w-6 h-6 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                    <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Baza AI</h1>
+                    <div className="w-10" />
                 </header>
 
-                <>
-                    <ChatDisplay 
-                        messages={currentSession?.messages || []} 
-                        onRetry={handleRetry}
-                        onRegenerate={handleRegenerate}
-                        onSuggestedQuestionClick={handleSuggestedQuestionClick}
-                        isSending={isSending}
-                    />
-                    
-                    <div className="p-2 sm:p-4 border-t border-slate-200 dark:border-slate-700">
-                        <div className="relative flex items-end gap-2">
-                            {/* File/Camera Buttons */}
-                            <div className="flex flex-col sm:flex-row gap-1">
-                                <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700" title="Ongeraho ifoto cyangwa dosiye">
-                                    <PaperClipIcon className="w-6 h-6 text-slate-600 dark:text-slate-300"/>
-                                </button>
-                                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*,application/pdf,text/*" />
-                                <button onClick={() => setCameraModalOpen(true)} className="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700" title="Fata ifoto ukoresheje kamera">
-                                    <CameraIcon className="w-6 h-6 text-slate-600 dark:text-slate-300" />
-                                </button>
-                            </div>
+                <ChatDisplay
+                    messages={currentSession?.messages || []}
+                    isLoading={isSending}
+                />
 
-                            <div className="flex-1 flex flex-col items-start relative">
-                                {file && (
-                                    <div className="absolute bottom-full left-0 mb-2 p-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg max-w-xs">
-                                        <div className="flex items-center gap-2">
-                                            <img src={file.dataUrl} alt="Irebanyuma" className="w-10 h-10 rounded object-cover" />
-                                            <span className="text-sm truncate">{file.name}</span>
-                                            <button onClick={() => setFile(null)} className="p-1 rounded-full hover:bg-slate-300 dark:hover:bg-slate-600">&times;</button>
-                                        </div>
-                                    </div>
-                                )}
-                                <textarea
-                                    ref={textareaRef}
-                                    value={input}
-                                    onChange={(e) => setInput(e.target.value)}
-                                    onInput={handleTextareaInput}
-                                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(input, file); } }}
-                                    placeholder="Andika ubutumwa bwawe..."
-                                    className="w-full max-h-48 p-2 rounded-lg bg-slate-100 dark:bg-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 auto-resize"
-                                    rows={1}
-                                    disabled={isSending}
-                                />
-                            </div>
-
-                            <button 
-                                onClick={() => handleSendMessage(input, file)} 
-                                disabled={isSending || (!input.trim() && !file)} 
-                                className="p-2 rounded-full bg-blue-600 text-white transition-colors disabled:bg-blue-300 dark:disabled:bg-blue-800 disabled:cursor-not-allowed" 
-                                title="Ohereza ubutumwa"
+                <div className="border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 transition-colors duration-200">
+                    {file && (
+                        <div className="mb-2 relative inline-block">
+                            <img
+                                src={file.preview}
+                                alt="Preview"
+                                className="h-20 w-20 object-cover rounded-lg border border-gray-300 dark:border-gray-600"
+                            />
+                            <button
+                                onClick={() => setFile(null)}
+                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
                             >
-                                <PaperAirplaneIcon className="w-6 h-6"/>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
                             </button>
                         </div>
+                    )}
+                    <div className="flex gap-2">
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                                disabled={isSending}
+                            >
+                                <PaperClipIcon />
+                            </button>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleFileChange}
+                                className="hidden"
+                            />
+                            <button
+                                onClick={() => setCameraModalOpen(true)}
+                                className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                                disabled={isSending}
+                            >
+                                <CameraIcon />
+                            </button>
+                        </div>
+                        <textarea
+                            ref={textareaRef}
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder="Message Baza AI..."
+                            className="flex-1 resize-none rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition-colors"
+                            style={{ maxHeight: '200px', minHeight: '44px' }}
+                            disabled={isSending}
+                        />
+                        <button
+                            onClick={handleSend}
+                            disabled={(!input.trim() && !file) || isSending}
+                            className="p-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors"
+                        >
+                            <PaperAirplaneIcon />
+                        </button>
                     </div>
-                    <Legend />
-                </>
+                </div>
             </div>
-            
-            <SettingsModal isOpen={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} theme={theme} setTheme={setTheme} />
-            <CameraModal isOpen={cameraModalOpen} onClose={() => setCameraModalOpen(false)} onSend={handleSendFromCamera} />
+
+            <Legend />
+
+            <SettingsModal
+                isOpen={settingsModalOpen}
+                onClose={() => setSettingsModalOpen(false)}
+                theme={theme}
+                onThemeChange={setTheme}
+            />
+
+            <CameraModal
+                isOpen={cameraModalOpen}
+                onClose={() => setCameraModalOpen(false)}
+                onCapture={handleCameraCapture}
+            />
         </div>
     );
 }
